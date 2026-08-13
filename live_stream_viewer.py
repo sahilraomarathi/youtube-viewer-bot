@@ -1,7 +1,10 @@
 import asyncio
 import random
 import os
-from selenium_driverless import webdriver
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
 from selenium_driverless.types.by import By
 import time
 from datetime import datetime
