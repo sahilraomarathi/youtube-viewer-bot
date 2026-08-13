@@ -1,520 +1,454 @@
 import asyncio
 import random
-from selenium_driverless import webdriver
-from selenium_driverless.types.by import By
-from selenium_driverless.types.webelement import WebElement
+import os
 import time
+from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
 
-class YouTubeViewer:
-    def __init__(self):
+class LiveStreamViewer:
+    def __init__(self, viewer_id=1):
         self.driver = None
-        
-    async def setup_browser(self):
-        """Initialize the driverless browser with stealth settings"""
-        options = webdriver.ChromeOptions()
-        
-        # Safe stealth settings (removed all problematic flags)
+        self.viewer_id = viewer_id
+        self.is_watching = False
+
+    def setup_browser(self):
+        """Initialize the Chrome browser with stealth settings (synchronous)"""
+        options = Options()
+
+        # Create user data directory for this viewer
+        current_dir = os.path.abspath(os.getcwd())
+        user_data_dir = os.path.join(current_dir, "chrome_profiles", f"viewer_{self.viewer_id}")
+        user_data_dir = os.path.normpath(user_data_dir)
+
+        success = self.create_user_data_dir(user_data_dir)
+        if not success:
+            import tempfile
+            user_data_dir = os.path.join(tempfile.gettempdir(), f"youtube_viewer_{self.viewer_id}")
+            self.log(f"Using fallback temp directory: {user_data_dir}")
+            self.create_user_data_dir(user_data_dir)
+
+        # Stealth settings
         options.add_argument("--no-first-run")
         options.add_argument("--disable-infobars")
         options.add_argument("--disable-extensions-except")
         options.add_argument("--disable-plugins-discovery")
-        
-        # Use real user profile (optional - comment out if you don't want to use your profile)
-        # options.add_argument("--user-data-dir=C:/Users/YourUsername/AppData/Local/Google/Chrome/User Data")
-        
-        self.driver = await webdriver.Chrome(options=options)
-        
-    async def human_delay(self, min_seconds=1, max_seconds=3):
-        """Add human-like random delays"""
-        delay = random.uniform(min_seconds, max_seconds)
-        await asyncio.sleep(delay)
-    
-    async def is_video_playing(self):
-        """Check if video is currently playing"""
+
+        # Cloud hosting compatibility
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu-sandbox")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--headless=new")  # Use new headless mode
+
+        # Random window size
+        width = random.randint(1024, 1920)
+        height = random.randint(768, 1080)
+        options.add_argument(f"--window-size={width},{height}")
+
+        # Random user agent
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ]
+        selected_ua = random.choice(user_agents)
+        options.add_argument(f"--user-agent={selected_ua}")
+
+        # Separate profile per viewer
+        options.add_argument(f"--user-data-dir={user_data_dir}")
+
+        # Mobile simulation (30% chance)
+        if random.random() < 0.3:
+            options.add_argument("--user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1")
+            width = random.randint(375, 414)
+            height = random.randint(667, 896)
+            options.add_argument(f"--window-size={width},{height}")
+
+        self.log(f"Using profile directory: {user_data_dir}")
+
+        # Create driver with ChromeDriverManager
+        service = Service(ChromeDriverManager().install())
+        self.driver = webdriver.Chrome(service=service, options=options)
+
+        # Set timezone via CDP (synchronous)
+        self.driver.execute_cdp_cmd('Emulation.setTimezoneOverride', {
+            'timezoneId': random.choice(['America/New_York', 'America/Los_Angeles', 'Europe/London', 'Europe/Paris', 'Asia/Tokyo'])
+        })
+
+        self.log(f"Browser setup complete - UA: {selected_ua[:50]}...")
+
+    def create_user_data_dir(self, user_data_dir):
+        """Create user data directory if it doesn't exist"""
         try:
-            video_info = await self.driver.execute_script("""
-                const video = document.querySelector('video');
-                if (!video) return {exists: false};
-                return {
-                    exists: true,
-                    paused: video.paused,
-                    ended: video.ended,
-                    readyState: video.readyState,
-                    currentTime: video.currentTime,
-                    duration: video.duration
-                };
-            """)
-            
-            if video_info and video_info.get('exists'):
-                print(f"Video status: paused={video_info.get('paused')}, ended={video_info.get('ended')}, readyState={video_info.get('readyState')}, time={video_info.get('currentTime'):.1f}s")
-                return not video_info.get('paused') and not video_info.get('ended') and video_info.get('readyState', 0) > 2
+            if not os.path.exists(user_data_dir):
+                os.makedirs(user_data_dir, exist_ok=True)
+                print(f"📁 Created profile directory: {user_data_dir}")
             else:
-                print("No video element found")
-                return False
-        except Exception as e:
-            print(f"Error checking video status: {e}")
-            return False
-        
-    async def handle_youtube_overlays(self):
-        """Handle common YouTube overlays that might block video playback"""
-        try:
-            # Handle age verification
-            age_gate_selectors = [
-                "button[aria-label*='confirm']",
-                "button[aria-label*='Continue']", 
-                "#confirm-button",
-                ".style-scope.ytd-button-renderer[aria-label*='I understand']"
-            ]
-            
-            for selector in age_gate_selectors:
-                try:
-                    button = await self.driver.find_element(By.CSS_SELECTOR, selector)
-                    await button.click()
-                    print(f"Clicked age verification: {selector}")
-                    await self.human_delay(2, 3)
-                    return True
-                except:
-                    continue
-                    
-            # Handle sign-in prompts
-            signin_selectors = [
-                "button[aria-label*='No thanks']",
-                "button[aria-label*='Skip']",
-                ".yt-spec-button-shape-next--size-m[aria-label*='No thanks']"
-            ]
-            
-            for selector in signin_selectors:
-                try:
-                    button = await self.driver.find_element(By.CSS_SELECTOR, selector)
-                    await button.click()
-                    print(f"Dismissed sign-in prompt: {selector}")
-                    await self.human_delay(2, 3)
-                    return True
-                except:
-                    continue
-                    
-        except Exception as e:
-            print(f"Error handling overlays: {e}")
-        
-        return False
-    
-    async def scroll_randomly(self):
-        """Simulate human-like scrolling behavior"""
-        for _ in range(random.randint(2, 5)):
-            scroll_amount = random.randint(100, 400)
-            await self.driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
-            await self.human_delay(0.5, 1.5)
-            
-    async def is_youtube_short(self, url):
-        """Check if the URL is a YouTube Short"""
-        return "/shorts/" in url
-    
-    async def watch_short(self, short_url, watch_duration_seconds=None):
-        """Watch a YouTube Short with appropriate behavior"""
-        print(f"Starting to watch Short: {short_url}")
-        
-        try:
-            # Navigate to short
-            await self.driver.get(short_url)
-            await self.human_delay(3, 5)
-            
-            # Check if page loaded successfully
-            page_title = await self.driver.title
-            if "YouTube" not in page_title:
-                print(f"❌ Failed to load Short - Invalid page title: {page_title}")
-                return False
-            
-            # Handle overlays
-            await self.handle_youtube_overlays()
-            
-            # Check if video element exists
-            video_exists = await self.driver.execute_script("return !!document.querySelector('video');")
-            if not video_exists:
-                print("❌ Failed to load Short - No video element found")
-                return False
-            
-            # Shorts usually autoplay, just wait and scroll occasionally
-            if not watch_duration_seconds:
-                watch_duration_seconds = random.uniform(15, 45)  # Shorts are typically 15-60 seconds
-            
-            print(f"✅ Short loaded successfully! Watching for {watch_duration_seconds:.1f} seconds...")
-            
-            # Simulate watching behavior for shorts
-            intervals = random.randint(2, 4)
-            interval_time = watch_duration_seconds / intervals
-            
-            for i in range(intervals):
-                await asyncio.sleep(interval_time)
-                
-                # Occasionally scroll (shorts are vertical)
-                if random.random() < 0.4:  # 40% chance
-                    scroll_amount = random.randint(50, 200)
-                    await self.driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
-                
-                print(f"Watching Short... {((i+1)/intervals)*100:.0f}% complete")
-            
-            print("✅ Finished watching Short!")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error while watching Short: {e}")
-            return False
-    
-    async def watch_video(self, video_url, watch_duration_minutes=None):
-        """Watch a YouTube video with human-like behavior"""
-        print(f"Starting to watch: {video_url}")
-        
-        try:
-            # Navigate to video
-            await self.driver.get(video_url)
-            await self.human_delay(5, 8)
-            # Handle cookie consent if it appears
+                print(f"📁 Using existing profile: {user_data_dir}")
+
+            # Test write permissions
+            test_file = os.path.join(user_data_dir, "test_write.tmp")
             try:
-                # Try multiple cookie button selectors
-                cookie_selectors = [
-                    "//button[contains(text(), 'Accept all')]",
-                    "//button[contains(text(), 'I agree')]",
-                    "//button[contains(text(), 'Accept')]",
-                    "[aria-label*='Accept']",
-                    ".VfPpkd-LgbsSe[jsname='tWT92d']"
-                ]
-                
-                for selector in cookie_selectors:
-                    try:
-                        if selector.startswith("//"):
-                            cookie_button = await self.driver.find_element(By.XPATH, selector)
-                        else:
-                            cookie_button = await self.driver.find_element(By.CSS_SELECTOR, selector)
-                        
-                        if cookie_button:
-                            await cookie_button.click()
-                            print("Accepted cookies")
-                            await self.human_delay(2, 3)
-                            break
-                    except:
-                        continue
-            except:
-                pass
-            
-            # Wait for video to load
-            print("Waiting for page to load...")
-            await self.human_delay(5, 8)
-            
-            # Check what's on the page
-            page_title = await self.driver.title
-            print(f"Page title: {page_title}")
-            
-            # Check for common failure indicators
-            if "YouTube" not in page_title:
-                print(f"❌ Failed to load video - Invalid page title: {page_title}")
-                return False
-            
-            # Check for error messages
-            error_indicators = await self.driver.execute_script("""
-                return {
-                    videoUnavailable: !!document.querySelector('[data-testid="video-unavailable"]'),
-                    privateVideo: !!document.querySelector('.yt-alert-message'),
-                    ageRestricted: !!document.querySelector('[data-testid="age-gate"]'),
-                    deleted: document.title.includes('Video unavailable')
-                };
-            """)
-            
-            if any(error_indicators.values()):
-                print(f"❌ Video cannot be played - Error indicators: {error_indicators}")
-                return False
-            
-            # Handle any overlays first
-            await self.handle_youtube_overlays()
-            
-            # Check if video element exists
-            video_exists = await self.driver.execute_script("return !!document.querySelector('video');")
-            print(f"Video element exists: {video_exists}")
-            
-            if not video_exists:
-                print("No video element found, waiting longer...")
-                await self.human_delay(5, 10)
-                await self.handle_youtube_overlays()  # Try again after waiting
-                video_exists = await self.driver.execute_script("return !!document.querySelector('video');")
-                print(f"Video element exists after wait: {video_exists}")
-                
-                if not video_exists:
-                    print("❌ Failed to load video - No video element found after extended wait")
-                    return False
-            
-            print("Attempting to start video playback...")
-            
-            # Check initial video state
-            await self.is_video_playing()
-            
-            # Multiple attempts to start the video
-            video_started = False
-            
-            # Method 1: Wait for autoplay or click video area
-            try:
-                # First check if it's already playing
-                if await self.is_video_playing():
-                    print("Video is already playing!")
-                    video_started = True
-                else:
-                    # Try clicking the video area
-                    video_selectors = ["#movie_player", ".html5-video-player", "video"]
-                    for selector in video_selectors:
-                        try:
-                            video_element = await self.driver.find_element(By.CSS_SELECTOR, selector)
-                            await video_element.click()
-                            print(f"Clicked video element: {selector}")
-                            await self.human_delay(2, 3)
-                            if await self.is_video_playing():
-                                video_started = True
-                                break
-                        except Exception as e:
-                            print(f"Failed to click {selector}: {e}")
-                            continue
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+                print(f"✅ Write permissions confirmed for: {user_data_dir}")
+                return True
             except Exception as e:
-                print(f"Method 1 failed: {e}")
-            
-            # Method 2: Try play buttons
-            if not video_started:
-                try:
-                    play_selectors = [
-                        ".ytp-large-play-button",
-                        ".ytp-play-button", 
-                        "button[aria-label*='Play']",
-                        "[title*='Play']"
-                    ]
-                    
-                    for selector in play_selectors:
-                        try:
-                            play_button = await self.driver.find_element(By.CSS_SELECTOR, selector)
-                            await play_button.click()
-                            print(f"Clicked play button: {selector}")
-                            await self.human_delay(2, 3)
-                            if await self.is_video_playing():
-                                video_started = True
-                                break
-                        except Exception as e:
-                            print(f"Failed to click {selector}: {e}")
-                            continue
-                except Exception as e:
-                    print(f"Method 2 failed: {e}")
-            
-            # Method 3: JavaScript play
-            if not video_started:
-                try:
-                    result = await self.driver.execute_script("""
-                        const video = document.querySelector('video');
-                        if (video) {
-                            const playPromise = video.play();
-                            if (playPromise !== undefined) {
-                                return playPromise.then(() => 'success').catch(e => 'error: ' + e.message);
-                            }
-                            return 'no promise';
-                        }
-                        return 'no video';
-                    """)
-                    print(f"JavaScript play result: {result}")
-                    await self.human_delay(2, 3)
-                    if await self.is_video_playing():
-                        video_started = True
-                except Exception as e:
-                    print(f"Method 3 failed: {e}")
-            
-            # Method 4: Keyboard spacebar
-            if not video_started:
-                try:
-                    body = await self.driver.find_element(By.TAG_NAME, "body")
-                    await body.send_keys(" ")
-                    print("Pressed spacebar")
-                    await self.human_delay(2, 3)
-                    if await self.is_video_playing():
-                        video_started = True
-                except Exception as e:
-                    print(f"Method 4 failed: {e}")
-            
-            # Final check
-            await self.human_delay(2, 4)
-            if await self.is_video_playing():
-                print("✓ Video is now playing!")
-                video_started = True
-            else:
-                print("⚠ Video is not playing - checking for issues...")
-                
-                # Debug: Check for common blocking elements
-                blocking_elements = await self.driver.execute_script("""
-                    const checks = {
-                        ageGate: !!document.querySelector('[data-testid="age-gate"]'),
-                        signInRequired: !!document.querySelector('ytd-consent-bump-v2-lightbox'),
-                        adPlaying: !!document.querySelector('.ad-showing'),
-                        errorMessage: !!document.querySelector('.ytp-error')
-                    };
-                    return checks;
-                """)
-                print(f"Blocking elements check: {blocking_elements}")
-                
-                if not video_started:
-                    print("❌ Failed to start video playback after all attempts")
-                    return False
-            
-            print("✅ Video loaded and playing successfully!")
-            
-            # Get video duration if not specified
-            if not watch_duration_minutes:
-                try:
-                    duration_element = await self.driver.find_element(By.CSS_SELECTOR, ".ytp-time-duration")
-                    duration_text = await duration_element.text
-                    # Parse duration and watch 70-90% of it
-                    watch_duration_minutes = self.parse_duration(duration_text) * random.uniform(0.7, 0.9)
-                except:
-                    watch_duration_minutes = random.uniform(2, 5)  # Default 2-5 minutes
-            
-            print(f"Watching for approximately {watch_duration_minutes:.1f} minutes...")
-            
-            # Simulate watching behavior
-            watch_time = watch_duration_minutes * 60  # Convert to seconds
-            intervals = random.randint(8, 15)  # Number of interactions during watch
-            interval_time = watch_time / intervals
-            
-            for i in range(intervals):
-                await asyncio.sleep(interval_time)
-                
-                # Random human-like actions
-                action = random.choice(['scroll', 'pause_resume', 'volume', 'nothing'])
-                
-                if action == 'scroll':
-                    await self.scroll_randomly()
-                elif action == 'pause_resume':
-                    # Occasionally pause and resume
-                    if random.random() < 0.3:  # 30% chance
-                        try:
-                            video_player = await self.driver.find_element(By.CSS_SELECTOR, ".html5-video-player")
-                            await video_player.click()  # Pause
-                            await self.human_delay(2, 8)  # Pause for 2-8 seconds
-                            await video_player.click()  # Resume
-                        except:
-                            pass
-                elif action == 'volume':
-                    # Occasionally adjust volume
-                    if random.random() < 0.2:  # 20% chance
-                        try:
-                            await self.driver.execute_script("document.querySelector('video').volume = Math.random();")
-                        except:
-                            pass
-                
-                print(f"Watching... {((i+1)/intervals)*100:.0f}% complete")
-            
-            print("✅ Finished watching video!")
-            return True
-            
+                print(f"❌ No write permissions for {user_data_dir}: {e}")
+                return False
         except Exception as e:
-            print(f"❌ Error while watching video: {e}")
+            print(f"⚠️ Warning: Could not create profile directory {user_data_dir}: {e}")
             return False
-    
-    def parse_duration(self, duration_str):
-        """Parse YouTube duration string to minutes"""
+
+    def human_delay(self, min_seconds=1, max_seconds=3):
+        """Synchronous human-like delay"""
+        delay = random.uniform(min_seconds, max_seconds)
+        time.sleep(delay)
+
+    def log(self, message):
+        """Log with viewer ID and timestamp"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] Viewer {self.viewer_id}: {message}")
+
+    def is_stream_live(self):
+        """Check if the stream is currently live"""
         try:
-            parts = duration_str.split(':')
-            if len(parts) == 2:  # MM:SS
-                return int(parts[0]) + int(parts[1])/60
-            elif len(parts) == 3:  # HH:MM:SS
-                return int(parts[0])*60 + int(parts[1]) + int(parts[2])/60
-        except:
-            pass
-        return 3  # Default 3 minutes if parsing fails
-    
-    async def close(self):
+            live_indicators = self.driver.execute_script("""
+                return {
+                    liveBadge: !!document.querySelector('.ytp-live-badge'),
+                    liveText: document.body.innerText.includes('LIVE'),
+                    streamEnded: document.body.innerText.includes('stream has ended') || 
+                                document.body.innerText.includes('This live stream has ended'),
+                    videoExists: !!document.querySelector('video')
+                };
+            """)
+
+            if live_indicators.get('streamEnded'):
+                self.log("Stream has ended")
+                return False
+
+            return live_indicators.get('liveBadge') or live_indicators.get('liveText')
+
+        except Exception as e:
+            self.log(f"Error checking stream status: {e}")
+            return False
+
+    def handle_youtube_overlays(self):
+        """Handle common YouTube overlays"""
+        try:
+            # Cookie consent
+            cookie_selectors = [
+                "//button[contains(text(), 'Accept all')]",
+                "//button[contains(text(), 'I agree')]",
+                "[aria-label*='Accept']"
+            ]
+
+            for selector in cookie_selectors:
+                try:
+                    if selector.startswith("//"):
+                        button = self.driver.find_element(By.XPATH, selector)
+                    else:
+                        button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    button.click()
+                    self.log("Accepted cookies")
+                    self.human_delay(1, 2)
+                    break
+                except:
+                    continue
+
+            # Age verification
+            age_selectors = [
+                "button[aria-label*='Continue']",
+                "#confirm-button"
+            ]
+
+            for selector in age_selectors:
+                try:
+                    button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    button.click()
+                    self.log("Passed age verification")
+                    self.human_delay(1, 2)
+                    break
+                except:
+                    continue
+
+        except Exception as e:
+            self.log(f"Error handling overlays: {e}")
+
+    def simulate_viewer_behavior(self):
+        """Simulate realistic viewer behavior during stream"""
+        behaviors = [
+            'scroll_chat',
+            'scroll_video',
+            'pause_resume',
+            'volume_adjust',
+            'fullscreen_toggle',
+            'nothing'
+        ]
+
+        action = random.choice(behaviors)
+
+        try:
+            if action == 'scroll_chat':
+                self.driver.execute_script("window.scrollBy(0, 100);")
+                self.log("Scrolled chat")
+
+            elif action == 'scroll_video':
+                scroll_amount = random.randint(50, 200)
+                self.driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
+                self.log("Scrolled page")
+
+            elif action == 'pause_resume':
+                if random.random() < 0.1:
+                    try:
+                        video = self.driver.find_element(By.CSS_SELECTOR, "video")
+                        video.click()  # Pause
+                        self.human_delay(2, 5)
+                        video.click()  # Resume
+                        self.log("Paused and resumed")
+                    except:
+                        pass
+
+            elif action == 'volume_adjust':
+                if random.random() < 0.05:
+                    volume = random.uniform(0.3, 1.0)
+                    self.driver.execute_script(f"document.querySelector('video').volume = {volume};")
+                    self.log(f"Adjusted volume to {volume:.2f}")
+
+            elif action == 'fullscreen_toggle':
+                if random.random() < 0.02:
+                    try:
+                        fullscreen_btn = self.driver.find_element(By.CSS_SELECTOR, ".ytp-fullscreen-button")
+                        fullscreen_btn.click()
+                        self.human_delay(3, 8)
+                        fullscreen_btn.click()
+                        self.log("Toggled fullscreen")
+                    except:
+                        pass
+
+        except Exception as e:
+            self.log(f"Error in behavior simulation: {e}")
+
+    def verify_connection(self):
+        """Verify that this viewer is properly connected and counted"""
+        try:
+            viewer_count = self.driver.execute_script("""
+                const selectors = [
+                    '.view-count',
+                    '.style-scope.ytd-video-view-count-renderer',
+                    '[class*="view-count"]',
+                    '.ytp-title-channel'
+                ];
+                for (let selector of selectors) {
+                    const element = document.querySelector(selector);
+                    if (element && element.textContent.includes('watching')) {
+                        return element.textContent;
+                    }
+                }
+                const bodyText = document.body.innerText;
+                const watchingMatch = bodyText.match(/(\\d+)\\s*watching/i);
+                if (watchingMatch) {
+                    return watchingMatch[0];
+                }
+                return 'Not found';
+            """)
+
+            video_status = self.driver.execute_script("""
+                const video = document.querySelector('video');
+                if (!video) return 'No video element';
+                return {
+                    playing: !video.paused && !video.ended,
+                    currentTime: video.currentTime,
+                    duration: video.duration,
+                    readyState: video.readyState
+                };
+            """)
+
+            self.log(f"Connection verified - Viewer count: {viewer_count}, Video status: {video_status}")
+            return True
+
+        except Exception as e:
+            self.log(f"Error verifying connection: {e}")
+            return False
+
+    def watch_live_stream(self, stream_url, max_duration_minutes=None):
+        """Watch a live stream with realistic behavior (synchronous)"""
+        self.log(f"Starting to watch live stream: {stream_url}")
+
+        try:
+            self.driver.get(stream_url)
+            self.human_delay(8, 12)
+
+            self.handle_youtube_overlays()
+
+            if not self.is_stream_live():
+                self.log("❌ Stream is not live or not found")
+                return False
+
+            self.log("✅ Stream is live! Starting to watch...")
+
+            try:
+                video = self.driver.find_element(By.CSS_SELECTOR, "video")
+                video.click()
+                self.human_delay(3, 5)
+
+                self.driver.execute_script("""
+                    const video = document.querySelector('video');
+                    if (video && video.paused) {
+                        video.play();
+                    }
+                """)
+            except Exception as e:
+                self.log(f"Error starting video: {e}")
+
+            self.human_delay(10, 15)
+            self.verify_connection()
+
+            self.is_watching = True
+            start_time = time.time()
+            max_duration_seconds = max_duration_minutes * 60 if max_duration_minutes else float('inf')
+
+            loop_count = 0
+            while self.is_watching:
+                loop_count += 1
+
+                if not self.is_stream_live():
+                    self.log("Stream ended, stopping viewer")
+                    break
+
+                if time.time() - start_time > max_duration_seconds:
+                    self.log(f"Reached max duration of {max_duration_minutes} minutes")
+                    break
+
+                if loop_count % 10 == 0:
+                    self.verify_connection()
+
+                self.simulate_viewer_behavior()
+
+                wait_time = random.uniform(60, 180)
+                time.sleep(wait_time)  # Blocking, but we run in a thread
+
+            self.log("✅ Finished watching stream")
+            return True
+
+        except Exception as e:
+            self.log(f"❌ Error watching stream: {e}")
+            return False
+        finally:
+            self.is_watching = False
+
+    def stop_watching(self):
+        """Stop watching the stream"""
+        self.is_watching = False
+        self.log("Stopping stream viewer")
+
+    def close(self):
         """Close the browser"""
         if self.driver:
-            await self.driver.quit()
+            self.driver.quit()
+            self.log("Browser closed")
+
+# Multi-viewer manager (async, uses threads for each viewer)
+class MultiViewerManager:
+    def __init__(self):
+        self.viewers = []
+
+    async def start_viewer_with_delay(self, viewer, stream_url, delay, max_duration_minutes):
+        """Start a viewer with initial delay, run its watch in a thread"""
+        await asyncio.sleep(delay)
+        try:
+            # Run the synchronous watch in a thread to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,  # default executor (ThreadPoolExecutor)
+                self._run_viewer,
+                viewer,
+                stream_url,
+                max_duration_minutes
+            )
+            return result
+        except Exception as e:
+            viewer.log(f"Viewer failed: {e}")
+            return False
+        finally:
+            await asyncio.to_thread(viewer.close)
+
+    def _run_viewer(self, viewer, stream_url, max_duration_minutes):
+        """Wrapper to set up and watch (runs in a thread)"""
+        try:
+            viewer.setup_browser()
+            return viewer.watch_live_stream(stream_url, max_duration_minutes)
+        except Exception as e:
+            viewer.log(f"Error in viewer thread: {e}")
+            return False
+
+    async def create_viewers(self, count, stream_url, max_duration_minutes=None):
+        """Create multiple viewers concurrently"""
+        print(f"🚀 Creating {count} viewers for stream: {stream_url}")
+        print(f"⏰ Viewers will start with 0-60 second delays for better distribution")
+
+        tasks = []
+        for i in range(1, count + 1):
+            viewer = LiveStreamViewer(viewer_id=i)
+            self.viewers.append(viewer)
+
+            start_delay = random.uniform(0, 60)
+            task = asyncio.create_task(
+                self.start_viewer_with_delay(viewer, stream_url, start_delay, max_duration_minutes)
+            )
+            tasks.append(task)
+
+        # Monitor viewers periodically (async)
+        monitor_task = asyncio.create_task(self.monitor_viewers())
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        monitor_task.cancel()
+
+        successful = sum(1 for r in results if r is True)
+        failed = len(results) - successful
+        print(f"📊 Final Results: {successful} successful, {failed} failed viewers")
+
+    async def monitor_viewers(self):
+        """Monitor active viewers and report status"""
+        try:
+            while True:
+                await asyncio.sleep(120)  # Check every 2 minutes
+                active_count = sum(1 for viewer in self.viewers if viewer.is_watching)
+                print(f"📈 Status Update: {active_count}/{len(self.viewers)} viewers currently active")
+        except asyncio.CancelledError:
+            pass
+
+    async def stop_all_viewers(self):
+        """Stop all viewers"""
+        print("Stopping all viewers...")
+        for viewer in self.viewers:
+            await asyncio.to_thread(viewer.stop_watching)
 
 async def main():
-    viewer = YouTubeViewer()
-    
-    # Import video lists
+    # Configuration - override with environment variables if needed
+    STREAM_URL = os.getenv("STREAM_URL", "https://www.youtube.com/watch?v=QmgZJmzL-0U")
+    VIEWER_COUNT = int(os.getenv("VIEWER_COUNT", "3"))
+    MAX_DURATION_MINUTES = int(os.getenv("MAX_DURATION_MINUTES", "0") or 0)  # 0 = unlimited
+
+    manager = MultiViewerManager()
+
     try:
-        from video_lists import REGULAR_VIDEOS, YOUTUBE_SHORTS, MIXED_PLAYLIST
-        
-        # Choose which playlist to use
-        video_urls = REGULAR_VIDEOS  # Change this to YOUTUBE_SHORTS, MIXED_PLAYLIST, etc.
-        
-        # Or create a custom list here
-        # video_urls = [
-        #     "https://www.youtube.com/watch?v=wx4h9KKcFtE",
-        #     "https://www.youtube.com/shorts/SOME_SHORT_ID",
-        #     # Add more URLs...
-        # ]
-        
-    except ImportError:
-        # Fallback if video_lists.py doesn't exist
-        video_urls = [
-            "https://www.youtube.com/watch?v=wx4h9KKcFtE",
-        ]
-    
-    try:
-        await viewer.setup_browser()
-        
-        print(f"Starting to watch {len(video_urls)} videos...")
-        
-        # Track statistics
-        successful_videos = 0
-        failed_videos = 0
-        skipped_videos = []
-        
-        for i, video_url in enumerate(video_urls, 1):
-            print(f"\n{'='*50}")
-            print(f"Video {i}/{len(video_urls)}")
-            print(f"{'='*50}")
-            
-            try:
-                # Check if it's a Short or regular video
-                if await viewer.is_youtube_short(video_url):
-                    success = await viewer.watch_short(video_url)
-                else:
-                    success = await viewer.watch_video(video_url)
-                
-                if success:
-                    successful_videos += 1
-                    print(f"✅ Video {i} completed successfully")
-                else:
-                    failed_videos += 1
-                    skipped_videos.append(video_url)
-                    print(f"⏭️ Video {i} failed - skipping to next video")
-                
-            except Exception as e:
-                failed_videos += 1
-                skipped_videos.append(video_url)
-                print(f"❌ Video {i} crashed with error: {e}")
-                print(f"⏭️ Skipping to next video")
-            
-            # Random break between videos (like a real user)
-            if i < len(video_urls):  # Don't wait after the last video
-                break_time = random.uniform(10, 30)  # 10-30 seconds between videos
-                print(f"Taking a {break_time:.1f} second break before next video...")
-                await asyncio.sleep(break_time)
-        
-        # Final statistics
-        print(f"\n{'='*60}")
-        print(f"📊 FINAL STATISTICS")
-        print(f"{'='*60}")
-        print(f"✅ Successfully watched: {successful_videos}/{len(video_urls)} videos")
-        print(f"❌ Failed/Skipped: {failed_videos}/{len(video_urls)} videos")
-        
-        if skipped_videos:
-            print(f"\n⏭️ Skipped videos:")
-            for i, url in enumerate(skipped_videos, 1):
-                print(f"   {i}. {url}")
-        
-        if successful_videos > 0:
-            print(f"\n🎉 Session completed! Watched {successful_videos} videos successfully!")
-        else:
-            print(f"\n⚠️ No videos were watched successfully")
-        
-        # Keep browser open for a bit
-        await asyncio.sleep(5)
-        
+        await manager.create_viewers(VIEWER_COUNT, STREAM_URL, MAX_DURATION_MINUTES if MAX_DURATION_MINUTES > 0 else None)
+        print(f"🎉 All {VIEWER_COUNT} viewers completed!")
+
+    except KeyboardInterrupt:
+        print("\n⏹️ Stopping all viewers...")
+        await manager.stop_all_viewers()
     except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        await viewer.close()
+        print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
